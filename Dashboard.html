@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>battery_session :: monitor</title>
+<script src="chart.umd.min.js"></script>
+<style>
+  /* Local font files — no CDN, no network request, ever. */
+  @font-face {
+    font-family: 'JetBrains Mono';
+    src: url('fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2');
+    font-weight: 400; font-style: normal; font-display: swap;
+  }
+  @font-face {
+    font-family: 'JetBrains Mono';
+    src: url('fonts/jetbrains-mono-latin-500-normal.woff2') format('woff2');
+    font-weight: 500; font-style: normal; font-display: swap;
+  }
+  @font-face {
+    font-family: 'JetBrains Mono';
+    src: url('fonts/jetbrains-mono-latin-700-normal.woff2') format('woff2');
+    font-weight: 700; font-style: normal; font-display: swap;
+  }
+</style>
+<style>
+  :root {
+    --bg: #050a06; --panel: #0a1410; --panel-border: #1f4d33;
+    --phosphor: #4dff88; --phosphor-dim: #2b8a54; --phosphor-faint: #175a34;
+    --amber: #ffb454; --red: #ff5c5c; --violet: #b98cff;
+    --text: #c8f5d8; --muted: #5f9b78;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); }
+  body {
+    color: var(--text);
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    padding: 22px; margin: 0; font-size: 13px;
+    position: relative; min-height: 100vh;
+  }
+
+  /* CRT scanline overlay — subtle, single signature effect, not stacked with
+     other motion so it doesn't fight for attention. */
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 999;
+    background: repeating-linear-gradient(
+      to bottom, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px,
+      transparent 1px, transparent 3px
+    );
+    mix-blend-mode: overlay;
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 998;
+    background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.45) 100%);
+  }
+
+  .container { max-width: 1180px; margin: 0 auto; position: relative; z-index: 1; }
+
+  .crt-cursor { display: inline-block; width: 8px; height: 1em; background: var(--phosphor); vertical-align: text-bottom; animation: blink 1s steps(1) infinite; margin-left: 4px; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .header { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 14px; margin-bottom: 16px; border-bottom: 1px solid var(--panel-border); padding-bottom: 14px; }
+  .prompt { color: var(--phosphor-dim); font-size: 12px; }
+  .prompt .path { color: var(--phosphor); }
+  h1 { margin: 4px 0 0; font-size: 19px; font-weight: 700; color: var(--phosphor); letter-spacing: 0.5px; text-shadow: 0 0 8px rgba(77,255,136,0.35); text-transform: lowercase; }
+  .subtitle { font-size: 11px; color: var(--muted); margin-top: 3px; letter-spacing: 0.5px; }
+
+  .status-badge { font-size: 11px; font-weight: 700; padding: 5px 10px; border: 1px solid; letter-spacing: 1px; text-transform: uppercase; display: inline-flex; align-items: center; gap: 6px; }
+  .status-live { color: var(--phosphor); border-color: var(--phosphor-faint); background: rgba(77,255,136,0.06); }
+  .status-dead { color: var(--red); border-color: var(--red); background: rgba(255,92,92,0.08); }
+  .status-frozen { color: #7fd4ff; border-color: #7fd4ff; background: rgba(127,212,255,0.08); }
+
+  .freeze-btn {
+    font-family: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+    padding: 5px 12px; cursor: pointer; text-transform: uppercase;
+    background: var(--panel); color: var(--muted); border: 1px solid var(--panel-border);
+  }
+  .freeze-btn:hover { color: var(--text); border-color: var(--phosphor-dim); }
+  .freeze-btn.frozen { color: #7fd4ff; border-color: #7fd4ff; background: rgba(127,212,255,0.08); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+  /* Segmented filter — terminal tab style, box-drawing edges instead of radius */
+  .segmented { display: inline-flex; border: 1px solid var(--panel-border); }
+  .segmented button {
+    border: none; border-right: 1px solid var(--panel-border); background: var(--panel);
+    color: var(--muted); font-family: inherit; font-size: 11px; font-weight: 700;
+    padding: 7px 13px; cursor: pointer; letter-spacing: 0.5px; text-transform: uppercase;
+  }
+  .segmented button:last-child { border-right: none; }
+  .segmented button:hover { color: var(--text); }
+  .segmented button.active { background: var(--phosphor-faint); color: var(--phosphor); text-shadow: 0 0 6px rgba(77,255,136,0.5); }
+
+  .top-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+
+  .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 18px; }
+  .stat-card { background: var(--panel); border: 1px solid var(--panel-border); padding: 12px 14px; position: relative; }
+  .stat-card::before { content: "//"; position: absolute; top: 8px; right: 10px; color: var(--phosphor-faint); font-size: 10px; }
+  .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+  .stat-val { font-size: 22px; font-weight: 700; color: var(--phosphor); text-shadow: 0 0 6px rgba(77,255,136,0.25); }
+  .stat-sub { font-size: 10px; color: var(--muted); margin-top: 3px; }
+  .stat-card.warn .stat-val { color: var(--amber); text-shadow: 0 0 6px rgba(255,180,84,0.3); }
+  .stat-card.bad .stat-val { color: var(--red); text-shadow: 0 0 6px rgba(255,92,92,0.3); }
+
+  .grid-layout { display: grid; grid-template-columns: 2.1fr 1fr; gap: 14px; }
+  @media (max-width: 800px) { .grid-layout { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--panel-border); padding: 16px; }
+  .panel-title { font-size: 11px; color: var(--phosphor-dim); text-transform: uppercase; letter-spacing: 1.5px; margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
+  .panel-title::before { content: ">"; color: var(--phosphor); }
+
+  .lb-item { margin-bottom: 13px; font-family: inherit; }
+  .lb-top { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; margin-bottom: 5px; }
+  .lb-name { display: flex; align-items: center; gap: 7px; font-weight: 700; color: var(--text); }
+  .lb-cat-dot { width: 6px; height: 6px; flex-shrink: 0; }
+  .lb-icon { display: inline-flex; align-items: center; }
+  .lb-meta { color: var(--muted); font-size: 11px; }
+  .lb-bar-track { height: 4px; background: rgba(255,255,255,0.05); }
+  .lb-bar-fill { height: 100%; }
+
+  .legend-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--panel-border); }
+  .legend-chip { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .legend-dot { width: 6px; height: 6px; }
+
+  .empty { color: var(--muted); font-size: 12px; text-align: center; padding: 24px 0; }
+  .empty::before { content: "[ "; }
+  .empty::after { content: " ]"; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="header">
+    <div>
+      <div class="prompt">root@laptop <span class="path">~/BatteryTracker</span> $ tail -f session.log</div>
+      <h1>battery_session.monitor<span class="crt-cursor"></span></h1>
+      <div class="subtitle">live discharge/charge telemetry — polling every 2s</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div id="connectionStatus" class="status-badge status-live"><span class="dot"></span> LIVE</div>
+      <button id="freezeToggle" class="freeze-btn">⏸ FREEZE</button>
+      <button id="loadHistoryBtn" class="freeze-btn">⏏ LOAD FULL SESSION</button>
+      <button id="returnLiveBtn" class="freeze-btn" style="display:none;">⬅ RETURN TO LIVE</button>
+    </div>
+  </div>
+
+  <div class="top-row">
+    <div class="segmented" id="filterButtons">
+      <button data-filter="all" class="active">ALL</button>
+      <button data-filter="unplugged">ON BATTERY</button>
+      <button data-filter="plugged">CHARGING</button>
+    </div>
+  </div>
+
+  <div class="stats-row" id="statsRow">
+    <div class="stat-card">
+      <div class="stat-label">rate.current</div>
+      <div class="stat-val" id="currentDraw">-- W</div>
+      <div class="stat-sub" id="currentState">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">rate.avg</div>
+      <div class="stat-val" id="avgDraw">-- W</div>
+    </div>
+    <div class="stat-card bad">
+      <div class="stat-label">rate.peak</div>
+      <div class="stat-val" id="peakDraw">-- W</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">batt.level</div>
+      <div class="stat-val" id="currentPct">-- %</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">session.len</div>
+      <div class="stat-val" id="sessionDuration">--</div>
+    </div>
+    <div class="stat-card warn" id="etrCard" style="display:none;">
+      <div class="stat-label">eta.empty</div>
+      <div class="stat-val" id="etrVal">--</div>
+      <div class="stat-sub">at current pace</div>
+    </div>
+  </div>
+
+  <div class="grid-layout">
+    <div class="panel">
+      <div class="panel-title">draw_vs_battery.chart</div>
+      <canvas id="powerChart" height="130"></canvas>
+      <div id="chartScrollWrap" style="display:none; margin-top:10px;">
+        <div id="scrollRangeLabel" style="font-size:10px; color: var(--muted); margin-bottom:4px; text-align:center;"></div>
+        <input type="range" id="chartScroll" min="0" max="0" value="0" style="width:100%; accent-color: var(--phosphor);">
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">top_processes.log</div>
+      <div id="leaderboardList"><div class="empty">awaiting data</div></div>
+      <div class="legend-row" id="categoryLegend"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let powerChartInstance = null;
+  let currentFilter = 'all';
+  const VIEWPORT_SIZE = 150; // chart shows this many points at once — keeps rendering cost flat
+  let scrollOffset = 0;
+  let lastActiveData = []; // most recent filtered dataset, so the slider can slice without a full re-render
+  let usingLoadedHistory = false;
+  let loadedHistory = [];
+
+  document.getElementById('chartScroll').addEventListener('input', (e) => {
+    scrollOffset = parseInt(e.target.value, 10);
+    const windowData = lastActiveData.slice(scrollOffset, scrollOffset + VIEWPORT_SIZE);
+    renderChart(windowData, lastActiveData.length); // fast path — chart only, no leaderboard rebuild while dragging
+  });
+
+  const CATEGORIES = {
+    "Browser":       { color: "#4dff88", procs: ["chrome","msedge","firefox","brave","opera"] },
+    "Dev Tools":      { color: "#b98cff", procs: ["Code","devenv","powershell","pwsh","WindowsTerminal","cmd"] },
+    "Communication":  { color: "#ffb454", procs: ["Discord","WhatsApp.Root","Zoom","Teams","Slack","Skype"] },
+    "System":         { color: "#5f9b78", procs: ["System","svchost","explorer","MsMpEng","Memory Compression","dwm","taskhostw","SearchIndexer","SDXHelper"] },
+  };
+  const friendlyNames = {
+    "chrome": "Google Chrome", "msedge": "Microsoft Edge", "explorer": "File Explorer",
+    "powershell": "Windows PowerShell", "WhatsApp.Root": "WhatsApp", "Code": "VS Code",
+    "discord": "Discord", "spotify": "Spotify", "System": "System", "svchost": "Windows Service Host",
+    "MsMpEng": "Windows Defender", "Memory Compression": "Memory Compression"
+  };
+  const OTHER_COLOR = "#ff5c5c";
+  function categorize(procName) {
+    for (const [cat, def] of Object.entries(CATEGORIES)) { if (def.procs.includes(procName)) return cat; }
+    return "Other";
+  }
+  function catColor(cat) { return cat === "Other" ? OTHER_COLOR : CATEGORIES[cat].color; }
+
+  // Generic line-icon glyphs, not brand logos — keeps this trademark-safe and
+  // fits the terminal aesthetic better than colorful app icons would.
+  const ICONS = {
+    "Browser": '<circle cx="8" cy="8" r="6.5"/><path d="M1.5 8h13M8 1.5c2 2 2 11 0 13M8 1.5c-2 2-2 11 0 13" fill="none"/>',
+    "Dev Tools": '<path d="M4 4l-3 4 3 4M12 4l3 4-3 4M9.5 2.5l-3 11" fill="none"/>',
+    "Communication": '<path d="M2 3h12v8H6l-3 3v-3H2z" fill="none"/>',
+    "System": '<circle cx="8" cy="8" r="2.5" fill="none"/><path d="M8 1v2M8 13v2M15 8h-2M3 8H1M12.7 3.3l-1.4 1.4M4.7 11.3l-1.4 1.4M12.7 12.7l-1.4-1.4M4.7 4.7L3.3 3.3" fill="none"/>',
+    "Other": '<rect x="3" y="3" width="10" height="10" fill="none"/>'
+  };
+  function iconSvg(cat) {
+    const paths = ICONS[cat] || ICONS["Other"];
+    return `<svg width="13" height="13" viewBox="0 0 16 16" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">${paths}</svg>`;
+  }
+
+  function formatTime(totalSeconds) {
+    totalSeconds = Math.round(totalSeconds);
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  }
+  function getRate(d) { return typeof d.SignedRate_mW !== 'undefined' ? d.SignedRate_mW : (d.PowerRate_mW || 0); }
+  function getInterval(d) { return typeof d.IntervalSeconds !== 'undefined' ? d.IntervalSeconds : 10; }
+
+  document.getElementById('filterButtons').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-filter]');
+    if (!btn) return;
+    currentFilter = btn.dataset.filter;
+    scrollOffset = 0;
+    document.querySelectorAll('#filterButtons button').forEach(b => b.classList.toggle('active', b === btn));
+    renderDashboard();
+  });
+
+  function renderDashboard() {
+    const batteryData = usingLoadedHistory ? loadedHistory : window.batteryData;
+    if (typeof batteryData === 'undefined' || !batteryData || batteryData.length === 0) return;
+
+    let activeData = batteryData;
+    if (currentFilter === 'unplugged') activeData = batteryData.filter(d => d.IsOnBattery === true);
+    else if (currentFilter === 'plugged') activeData = batteryData.filter(d => d.IsOnBattery === false);
+
+    const absoluteLatest = batteryData[batteryData.length - 1];
+
+    const now = new Date();
+    // FIX: timestamps now include the date (yyyy-MM-dd HH:mm:ss), so this
+    // parses directly instead of guessing "yesterday" whenever the time-only
+    // string looked like it was in the future.
+    const lastUpdate = new Date(absoluteLatest.Timestamp.replace(' ', 'T'));
+    const secondsSinceUpdate = (now - lastUpdate) / 1000;
+    const statusEl = document.getElementById('connectionStatus');
+    const newLiveState = secondsSinceUpdate > 15 ? 'dead' : 'live';
+    // FIX: only touch this element's DOM when the state actually changes —
+    // replacing innerHTML every 2s (even with identical content) restarts the
+    // CSS pulse animation each time, which reads as a visible flicker.
+    if (statusEl.dataset.state !== newLiveState) {
+      statusEl.dataset.state = newLiveState;
+      if (newLiveState === 'dead') {
+        statusEl.className = 'status-badge status-dead';
+        statusEl.innerHTML = '<span class="dot"></span> OFFLINE — logger stopped';
+      } else {
+        statusEl.className = 'status-badge status-live';
+        statusEl.innerHTML = '<span class="dot"></span> LIVE';
+      }
+    }
+
+    if (activeData.length === 0) {
+      document.getElementById('leaderboardList').innerHTML = '<div class="empty">no rows match this filter</div>';
+      document.getElementById('categoryLegend').innerHTML = '';
+      if (powerChartInstance) { powerChartInstance.destroy(); powerChartInstance = null; }
+      return;
+    }
+
+    const displayLatest = activeData[activeData.length - 1];
+    const totalSessionSeconds = activeData.reduce((s, d) => s + getInterval(d), 0);
+    document.getElementById('sessionDuration').innerText = formatTime(totalSessionSeconds);
+
+    const wattsArray = activeData.map(d => getRate(d) / 1000);
+    const avgWatts = (wattsArray.reduce((a, b) => a + b, 0) / wattsArray.length).toFixed(1);
+    const peakDraw = Math.min(...wattsArray);
+
+    document.getElementById('currentDraw').innerText = Math.abs(getRate(displayLatest) / 1000).toFixed(1) + ' W';
+    document.getElementById('currentState').innerText = displayLatest.IsOnBattery ? 'discharging' : 'charging';
+    document.getElementById('avgDraw').innerText = Math.abs(avgWatts) + ' W';
+    document.getElementById('peakDraw').innerText = Math.abs(peakDraw).toFixed(1) + ' W';
+    document.getElementById('currentPct').innerText = absoluteLatest.BatteryPercent + '%';
+
+    const dischargeSamples = activeData.filter(d => d.IsOnBattery === true);
+    const etrCard = document.getElementById('etrCard');
+    if (dischargeSamples.length > 3) {
+      const firstPct = dischargeSamples[0].BatteryPercent;
+      const lastPct = dischargeSamples[dischargeSamples.length - 1].BatteryPercent;
+      const dischargeSeconds = dischargeSamples.reduce((s, d) => s + getInterval(d), 0);
+      const pctDropped = firstPct - lastPct;
+      if (pctDropped > 0 && dischargeSeconds > 0) {
+        const pctPerSecond = pctDropped / dischargeSeconds;
+        const secondsRemaining = absoluteLatest.BatteryPercent / pctPerSecond;
+        etrCard.style.display = '';
+        document.getElementById('etrVal').innerText = formatTime(secondsRemaining);
+      } else { etrCard.style.display = 'none'; }
+    } else { etrCard.style.display = 'none'; }
+
+    let totalPctDrop = activeData[0].BatteryPercent - absoluteLatest.BatteryPercent;
+    if (totalPctDrop < 0) totalPctDrop = 0;
+
+    let totalEnergy_mWs = 0;
+    const processStats = {};
+    activeData.forEach(d => {
+      const proc = d.ActiveProcess || 'Unknown';
+      const interval = getInterval(d);
+      const rate = getRate(d);
+      const drainRate = rate < 0 ? Math.abs(rate) : 0;
+      const energyTick = drainRate * interval;
+      totalEnergy_mWs += energyTick;
+      if (!processStats[proc]) processStats[proc] = { activeSeconds: 0, energyConsumed: 0 };
+      processStats[proc].activeSeconds += interval;
+      processStats[proc].energyConsumed += energyTick;
+    });
+
+    const sortedProcs = Object.keys(processStats)
+      .sort((a, b) => processStats[b].activeSeconds - processStats[a].activeSeconds)
+      .slice(0, 6);
+    const maxSeconds = Math.max(...sortedProcs.map(p => processStats[p].activeSeconds), 1);
+
+    const usedCats = new Set();
+    const lbHtml = sortedProcs.map(p => {
+      const cat = categorize(p);
+      usedCats.add(cat);
+      const color = catColor(cat);
+      const timeStr = formatTime(processStats[p].activeSeconds);
+      const widthPct = (processStats[p].activeSeconds / maxSeconds * 100).toFixed(0);
+      let pctStr = "";
+      if (totalPctDrop > 0 && totalEnergy_mWs > 0) {
+        const share = processStats[p].energyConsumed / totalEnergy_mWs;
+        const est = (totalPctDrop * share).toFixed(1);
+        if (est >= 0.1) pctStr = `~${est}%`;
+      }
+      const displayName = friendlyNames[p] || (p.charAt(0).toUpperCase() + p.slice(1));
+      return `
+        <div class="lb-item">
+          <div class="lb-top">
+            <span class="lb-name"><span class="lb-icon" style="color:${color}">${iconSvg(cat)}</span>${displayName}</span>
+            <span class="lb-meta">${timeStr}${pctStr ? ' · ' + pctStr : ''}</span>
+          </div>
+          <div class="lb-bar-track"><div class="lb-bar-fill" style="width:${widthPct}%; background:${color};"></div></div>
+        </div>`;
+    }).join('');
+    document.getElementById('leaderboardList').innerHTML = lbHtml || '<div class="empty">no app activity yet</div>';
+
+    document.getElementById('categoryLegend').innerHTML = [...usedCats].map(cat =>
+      `<span class="legend-chip"><span class="legend-dot" style="background:${catColor(cat)}"></span>${cat}</span>`
+    ).join('');
+
+    document.getElementById('categoryLegend').innerHTML = [...usedCats].map(cat =>
+      `<span class="legend-chip"><span class="legend-dot" style="background:${catColor(cat)}"></span>${cat}</span>`
+    ).join('');
+
+    lastActiveData = activeData; // so the slider can slice fresh without a full re-render
+
+    // FIX: rendering the ENTIRE session (up to 900 pts) on every 2s tick means
+    // Chart.js redraws more and more work as a session goes on, forever. Cap
+    // the live view to a fixed rolling window — lighter to draw, and the full
+    // history is still reachable via the scroll slider once frozen.
+    const scrollWrap = document.getElementById('chartScrollWrap');
+    if (isFrozen) {
+      scrollWrap.style.display = '';
+      const slider = document.getElementById('chartScroll');
+      const maxOffset = Math.max(0, activeData.length - VIEWPORT_SIZE);
+      if (scrollOffset > maxOffset) scrollOffset = maxOffset;
+      slider.max = maxOffset;
+      slider.value = scrollOffset;
+      renderChart(activeData.slice(scrollOffset, scrollOffset + VIEWPORT_SIZE), activeData.length);
+    } else {
+      scrollWrap.style.display = 'none';
+      renderChart(activeData.slice(Math.max(0, activeData.length - VIEWPORT_SIZE)), activeData.length);
+    }
+  }
+
+  // Peak-marker plugin state lives outside renderChart so it survives across
+  // updates — the chart instance itself is now created ONCE and reused via
+  // chart.update(), not destroyed and rebuilt every 2s (that full rebuild was
+  // the actual cause of the page-wide flash — a canvas that size repainting
+  // from scratch every tick reads as "the whole page refreshing" even though
+  // no other DOM was touched).
+  let currentWindowData = [];
+  const peakState = { idx: -1, arr: [] };
+  const peakMarkerPlugin = {
+    id: 'peakMarkerPlugin',
+    afterDatasetsDraw(chart) {
+      const { idx, arr } = peakState;
+      if (idx < 0 || !arr[idx] || arr[idx] <= 0) return;
+      const meta = chart.getDatasetMeta(0);
+      const pt = meta.data[idx];
+      if (!pt) return;
+      const { ctx } = chart;
+      ctx.save();
+      ctx.strokeStyle = '#ff5c5c';
+      ctx.fillStyle = '#ff5c5c';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.font = '10px "JetBrains Mono", monospace';
+      const label = `peak ${arr[idx].toFixed(1)}W`;
+      const labelY = pt.y > 30 ? pt.y - 12 : pt.y + 18;
+      ctx.textAlign = 'center';
+      ctx.fillText(label, pt.x, labelY);
+      ctx.restore();
+    }
+  };
+
+  // Marks every point where the session flips between charging and
+  // discharging — a vertical dashed line + label, so you can see at a
+  // glance where you unplugged or plugged back in, especially useful when
+  // scrolling through a full multi-hour history with several such switches.
+  const transitionState = { points: [] };
+  const transitionMarkerPlugin = {
+    id: 'transitionMarkerPlugin',
+    afterDatasetsDraw(chart) {
+      const { ctx, chartArea, scales } = chart;
+      transitionState.points.forEach(p => {
+        const x = scales.x.getPixelForValue(p.idx);
+        const color = p.toState === 'unplugged' ? '#4dff88' : '#ffb454';
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.setLineDash([3, 3]);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, chartArea.top);
+        ctx.lineTo(x, chartArea.bottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = color;
+        ctx.font = '9px "JetBrains Mono", monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(p.toState === 'unplugged' ? 'unplugged' : 'plugged in', x, chartArea.top + 10);
+        ctx.restore();
+      });
+    }
+  };
+
+  function renderChart(windowData, totalLen) {
+    if (windowData.length === 0) return;
+    currentWindowData = windowData; // read by segment/tooltip callbacks below
+    const rangeLabel = document.getElementById('scrollRangeLabel');
+    if (rangeLabel) {
+      rangeLabel.textContent = `${windowData[0].Timestamp} \u2192 ${windowData[windowData.length-1].Timestamp}  (${windowData.length} of ${totalLen} points)`;
+    }
+
+    // Axis labels stay time-only (compact) even though Timestamp now carries
+    // a full date — the scroll range label and tooltips show the full
+    // date-time already, which is where the date actually matters.
+    const labels = windowData.map(d => d.Timestamp.slice(-8));
+    // FIX: plot magnitude (always >= 0) instead of the signed rate — "more power"
+    // now reads as "line goes up," matching how people actually scan a chart.
+    // Charge vs. discharge is now shown via color instead of sign.
+    const magArray = windowData.map(d => Math.abs(getRate(d)) / 1000);
+    const battArray = windowData.map(d => d.BatteryPercent);
+
+    // FIX: battery % often barely moves within one chart window (a few tenths
+    // of a percent), which made the line look artificially flat against a
+    // fixed 0-100 scale. Scale to the observed range instead so real slope
+    // is visible, while still clamping to sane bounds.
+    const battMin = Math.min(...battArray), battMax = Math.max(...battArray);
+    const battSpread = battMax - battMin;
+    const battPad = battSpread < 2 ? 1 : battSpread * 0.2;
+    const y1min = Math.max(0, Math.floor(battMin - battPad));
+    const y1max = Math.min(100, Math.ceil(battMax + battPad));
+
+    peakState.idx = magArray.indexOf(Math.max(...magArray));
+    peakState.arr = magArray;
+
+    transitionState.points = [];
+    for (let i = 1; i < windowData.length; i++) {
+      if (windowData[i].IsOnBattery !== windowData[i - 1].IsOnBattery) {
+        transitionState.points.push({ idx: i, toState: windowData[i].IsOnBattery ? 'unplugged' : 'plugged' });
+      }
+    }
+
+    if (!powerChartInstance) {
+      // First render only: build the chart once.
+      const ctx = document.getElementById('powerChart').getContext('2d');
+      powerChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'RATE (W)', data: magArray, yAxisID: 'y',
+              borderColor: '#4dff88', backgroundColor: 'rgba(77,255,136,0.10)',
+              segment: {
+                borderColor: (segCtx) => {
+                  const d = currentWindowData[segCtx.p0DataIndex];
+                  return d && !d.IsOnBattery ? '#ffb454' : '#4dff88';
+                }
+              },
+              borderWidth: 2, fill: true, tension: 0.2, pointRadius: 0, pointHoverRadius: 5 },
+            { label: 'BATTERY %', data: battArray, yAxisID: 'y1',
+              borderColor: '#b98cff', borderWidth: 2, borderDash: [3, 3],
+              fill: false, tension: 0.2, pointRadius: 0, pointHoverRadius: 5 }
+          ]
+        },
+        plugins: [peakMarkerPlugin, transitionMarkerPlugin],
+        options: {
+          animation: false, responsive: true,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { labels: { color: '#5f9b78', usePointStyle: true, boxWidth: 6, font: { family: 'JetBrains Mono', size: 10 } } },
+            tooltip: {
+              titleFont: { family: 'JetBrains Mono' }, bodyFont: { family: 'JetBrains Mono' },
+              backgroundColor: '#0a1410', borderColor: '#1f4d33', borderWidth: 1,
+              callbacks: {
+                label: function(context) {
+                  const d = currentWindowData[context.dataIndex];
+                  if (context.dataset.yAxisID === 'y1') return `battery: ${d.BatteryPercent}%`;
+                  return [
+                    `rate: ${Math.abs(getRate(d)/1000).toFixed(1)} W [${d.IsOnBattery ? 'discharging' : 'charging'}]`,
+                    `proc: ${d.ActiveProcess}`,
+                    `top:  ${d.TopProcessesByCpuDelta}`
+                  ];
+                }
+              }
+            }
+          },
+          scales: {
+            y: { position: 'left', min: 0, grid: { color: '#122a1c' }, ticks: { color: '#5f9b78', font: { family: 'JetBrains Mono', size: 10 } }, title: { display: true, text: 'watts', color: '#5f9b78', font: { family: 'JetBrains Mono', size: 10 } } },
+            y1: { position: 'right', min: y1min, max: y1max, grid: { display: false }, ticks: { color: '#5f9b78', font: { family: 'JetBrains Mono', size: 10 } }, title: { display: true, text: 'batt %', color: '#5f9b78', font: { family: 'JetBrains Mono', size: 10 } } },
+            x: { grid: { display: false }, ticks: { color: '#5f9b78', maxTicksLimit: 8, font: { family: 'JetBrains Mono', size: 10 } } }
+          }
+        }
+      });
+      return;
+    }
+
+    // Subsequent renders: mutate the existing chart's data in place and
+    // update() — no destroy, no full canvas repaint, no page-wide flash.
+    powerChartInstance.data.labels = labels;
+    powerChartInstance.data.datasets[0].data = magArray;
+    powerChartInstance.data.datasets[1].data = battArray;
+    powerChartInstance.options.scales.y1.min = y1min;
+    powerChartInstance.options.scales.y1.max = y1max;
+    powerChartInstance.update('none'); // 'none' = skip animation, instant redraw
+  }
+
+  // --- Load Full Session ---
+  // Reads full_history.js, written periodically by the logger itself (about
+  // once a minute) in the exact same format as the live data.js — same
+  // generation code, so there's no parsing step and no schema-drift risk.
+  // Runs once on click, not on a timer, so it adds no ongoing cost.
+  const loadHistoryBtn = document.getElementById('loadHistoryBtn');
+  const returnLiveBtn = document.getElementById('returnLiveBtn');
+
+  loadHistoryBtn.addEventListener('click', () => {
+    const old = document.getElementById('fullHistoryScript');
+    if (old) old.remove();
+    const s = document.createElement('script');
+    s.id = 'fullHistoryScript';
+    s.src = 'full_history.js?_=' + Date.now();
+    s.onload = () => {
+      if (typeof window.fullBatteryData === 'undefined' || window.fullBatteryData.length === 0) {
+        alert('full_history.js has no data yet — give the logger about a minute to write its first snapshot, then try again.');
+        return;
+      }
+      loadedHistory = window.fullBatteryData;
+      usingLoadedHistory = true;
+      isFrozen = true;
+      scrollOffset = Math.max(0, loadedHistory.length - VIEWPORT_SIZE);
+      loadHistoryBtn.style.display = 'none';
+      freezeBtn.style.display = 'none';
+      returnLiveBtn.style.display = '';
+      const statusEl = document.getElementById('connectionStatus');
+      statusEl.className = 'status-badge status-frozen';
+      statusEl.innerHTML = `<span class="dot"></span> FULL SESSION LOADED — ${loadedHistory.length} rows`;
+      renderDashboard();
+    };
+    s.onerror = () => alert('Could not find full_history.js — make sure it sits next to Dashboard.html and the logger has been running at least a minute.');
+    document.body.appendChild(s);
+  });
+  returnLiveBtn.addEventListener('click', () => {
+    usingLoadedHistory = false;
+    loadedHistory = [];
+    isFrozen = false;
+    returnLiveBtn.style.display = 'none';
+    loadHistoryBtn.style.display = '';
+    freezeBtn.style.display = '';
+    freezeBtn.textContent = '⏸ FREEZE';
+    freezeBtn.classList.remove('frozen');
+    pollForUpdates();
+  });
+
+  function pollForUpdates() {
+    if (isFrozen || usingLoadedHistory) return; // logger keeps writing in the background — this only pauses the dashboard
+    const old = document.getElementById('dataScript');
+    if (old) old.remove();
+    const s = document.createElement('script');
+    s.id = 'dataScript';
+    s.src = 'data.js?_=' + Date.now();
+    s.onload = renderDashboard;
+    document.body.appendChild(s);
+  }
+
+  let isFrozen = false;
+  const freezeBtn = document.getElementById('freezeToggle');
+  freezeBtn.addEventListener('click', () => {
+    isFrozen = !isFrozen;
+    const statusEl = document.getElementById('connectionStatus');
+    if (isFrozen) {
+      freezeBtn.textContent = '▶ RESUME';
+      freezeBtn.classList.add('frozen');
+      statusEl.className = 'status-badge status-frozen';
+      statusEl.innerHTML = '<span class="dot"></span> FROZEN — data still logging in background';
+      scrollOffset = Math.max(0, lastActiveData.length - VIEWPORT_SIZE); // start scroll at "now", not the beginning
+      renderDashboard();
+    } else {
+      freezeBtn.textContent = '⏸ FREEZE';
+      freezeBtn.classList.remove('frozen');
+      pollForUpdates(); // catch up immediately on resume instead of waiting for the next tick
+    }
+  });
+
+  pollForUpdates();
+  setInterval(pollForUpdates, 2000);
+</script>
+</body>
+</html>
