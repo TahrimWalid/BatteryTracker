@@ -33,6 +33,7 @@ if (-not ("WindowHelper" -as [type])) {
 $trackerDir = "$env:USERPROFILE\Desktop\BatteryTracker"
 $logFile = "$trackerDir\BatteryLog.csv"
 $jsFile = "$trackerDir\data.js"
+$latestFile = "$trackerDir\latest.js"
 $fullHistoryFile = "$trackerDir\full_history.js"
 
 if (!(Test-Path $trackerDir)) { New-Item -ItemType Directory -Force -Path $trackerDir | Out-Null }
@@ -52,6 +53,14 @@ $maxHistoryEntries = 900
 # — generous for any real single session, not infinite.
 $maxFullHistoryEntries = 50000
 $fullHistoryWriteEveryNTicks = 30  # ~once a minute at 2s polling
+# FIX: previously wrote the ENTIRE capped array (up to 900 entries) to data.js
+# on every single 2s tick — the dashboard then had to re-parse/execute that
+# whole payload every poll even though only one entry had actually changed.
+# Now: write just the newest entry (tiny) every tick, and only rewrite the
+# full array periodically as a "keyframe" the dashboard can resync from if it
+# missed anything (tab was backgrounded, a write got skipped, etc). Same
+# pattern video codecs use — full frame occasionally, small deltas between.
+$keyframeEveryNTicks = 15  # ~30s at 2s polling
 $tickCount = 0
 
 Write-Host "Hybrid Battery Logger & Dashboard Engine Started." -ForegroundColor Cyan
@@ -146,17 +155,32 @@ while ($true) {
         $fullHistory.Add($entryObj)
         if ($fullHistory.Count -gt $maxFullHistoryEntries) { $fullHistory.RemoveAt(0) }
 
+        $tickCount++
+
+        # Tiny write, every tick: just the newest entry. This is what the
+        # dashboard polls every 2s under normal operation — cheap to write,
+        # cheap to parse.
         try {
-            $json = @($sessionHistory) | ConvertTo-Json -Compress
-            # window.batteryData (not const) so the dashboard can re-inject this file
-            # repeatedly via a fresh <script> tag without a "already declared" error —
-            # that's what enables live updates without reloading the whole page.
-            "window.batteryData = $json;" | Out-File $jsFile -Encoding utf8 -ErrorAction Stop
+            $latestJson = $entryObj | ConvertTo-Json -Compress
+            "window.latestEntry = $latestJson;" | Out-File $latestFile -Encoding utf8 -ErrorAction Stop
         } catch {
-            Write-Host "[$timestamp] Could not update data.js (file locked)." -ForegroundColor Red
+            Write-Host "[$timestamp] Could not update latest.js (file locked)." -ForegroundColor Red
         }
 
-        $tickCount++
+        # Full keyframe, periodically: lets the dashboard do a complete resync
+        # (first load, or catching up after a missed tick) without needing the
+        # full array reparsed on every single poll like before.
+        if ($tickCount % $keyframeEveryNTicks -eq 0 -or $tickCount -eq 1) {
+            try {
+                $json = @($sessionHistory) | ConvertTo-Json -Compress
+                # window.batteryData (not const) so the dashboard can re-inject this file
+                # repeatedly via a fresh <script> tag without a "already declared" error.
+                "window.batteryData = $json;" | Out-File $jsFile -Encoding utf8 -ErrorAction Stop
+            } catch {
+                Write-Host "[$timestamp] Could not update data.js (file locked)." -ForegroundColor Red
+            }
+        }
+
         if ($tickCount % $fullHistoryWriteEveryNTicks -eq 0) {
             try {
                 $fullJson = @($fullHistory) | ConvertTo-Json -Compress
