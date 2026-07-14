@@ -37,6 +37,7 @@
     font-family: 'JetBrains Mono', 'Courier New', monospace;
     padding: clamp(10px, 2vw, 22px); margin: 0; font-size: clamp(11px, 1vw, 13px);
     position: relative; min-height: 100vh;
+    overflow-x: hidden; /* safety net: no single element's overflow should ever drag the whole page sideways */
   }
 
   /* CRT scanline overlay — subtle, single signature effect, not stacked with
@@ -93,9 +94,7 @@
 
   .top-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: clamp(10px, 1.5vh, 18px); }
 
-  .stats-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: clamp(6px, 1vw, 10px); margin-bottom: clamp(10px, 1.5vh, 18px); }
-  @media (max-width: 900px) { .stats-row { grid-template-columns: repeat(3, 1fr); } }
-  @media (max-width: 500px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
+  .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: clamp(6px, 1vw, 10px); margin-bottom: clamp(10px, 1.5vh, 18px); }
   .stat-card {
     background: var(--panel); border: 1px solid var(--panel-border);
     padding: clamp(8px, 1.2vh, 12px) clamp(9px, 1.2vw, 14px); position: relative;
@@ -170,10 +169,72 @@
     background: var(--phosphor); border: 1px solid var(--phosphor);
     box-shadow: 0 0 6px rgba(77,255,136,0.6); cursor: grab;
   }
+
+  /* Tab switcher */
+  .tab-switcher { display: flex; gap: 8px; margin: 0 auto 14px; max-width: 1180px; }
+  .tab-btn {
+    font-family: inherit; font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
+    padding: 8px 16px; cursor: pointer; text-transform: uppercase;
+    background: var(--panel); color: var(--muted); border: 1px solid var(--panel-border);
+  }
+  .tab-btn:hover { color: var(--text); border-color: var(--phosphor-dim); }
+  .tab-btn.active { background: var(--phosphor-faint); color: var(--phosphor); text-shadow: 0 0 6px rgba(77,255,136,0.5); border-color: var(--phosphor-dim); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* Processes tab */
+  .sig-badge { font-size: 10px; padding: 1px 6px; border: 1px solid; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+  .sig-microsoft { color: var(--phosphor); border-color: var(--phosphor-faint); }
+  .sig-signed { color: #7fd4ff; border-color: #7fd4ff; }
+  .sig-unsigned { color: var(--red); border-color: var(--red); }
+  .sig-unknown { color: var(--amber); border-color: var(--amber); }
+  .sig-noaccess { color: var(--muted); border-color: var(--panel-border); }
+  .sig-nopath { color: var(--muted); border-color: var(--panel-border); }
+  .proc-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .proc-table th { text-align: left; color: var(--phosphor-dim); text-transform: uppercase; letter-spacing: 0.5px; font-size: 10px; padding: 6px 8px; border-bottom: 1px solid var(--panel-border); position: sticky; top: 0; background: var(--panel); }
+  .proc-table td { padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,0.04); white-space: nowrap; }
+  .proc-table tr:hover td { background: rgba(77,255,136,0.04); }
+  /* FIX: the process table's scroll box previously had a fixed max-height,
+     but its sibling (watchlist) panel is taller, so grid-stretch grew the
+     outer panel while the inner scroll box stayed pinned at 420px — leaving
+     a dead gap below it and a scrollbar that only spans that fixed box
+     instead of the panel's real height. Flex column + flex:1 makes it fill
+     whatever height the panel actually ends up being. */
+  .panel:has(.proc-scroll) { display: flex; flex-direction: column; }
+  .proc-scroll { flex: 1; min-height: 240px; overflow-y: auto; overflow-x: auto; }
+  .watch-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12px; gap: 8px; }
+  .watch-item:last-child { border-bottom: none; }
+  .watch-item > div:first-child { min-width: 0; flex: 1; overflow: hidden; }
+  .watch-name { font-weight: 700; }
+  .watch-meta { color: var(--muted); font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .no-window-icon { color: var(--amber); }
+  .gap-item { font-size: 11px; color: var(--muted); padding: 5px 0; border-bottom: 1px dashed var(--panel-border); }
+  .gap-item:last-child { border-bottom: none; }
+  .gap-item .gap-dur { color: var(--amber); font-weight: 700; }
+
+  .proc-search {
+    width: 100%; background: var(--bg); border: 1px solid var(--panel-border);
+    color: var(--text); font-family: inherit; font-size: 11px;
+    padding: 5px 8px; margin-bottom: 8px; outline: none; display: block;
+  }
+  .proc-search:focus { border-color: var(--phosphor-dim); }
+  .proc-search::placeholder { color: var(--muted); }
+  .proc-path { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }
+  td[data-has-net] { text-decoration: underline dotted; cursor: pointer; color: var(--phosphor-dim); }
+  .proc-table tr.net-open > td { background: rgba(77,255,136,0.05); }
+  .net-detail td { padding: 4px 8px 8px 20px; font-size: 10px; color: var(--muted); border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .net-conn { display: block; line-height: 1.9; }
 </style>
 </head>
 <body>
 
+
+<div class="tab-switcher">
+  <button class="tab-btn active" data-tab="battery">[~] BATTERY</button>
+  <button class="tab-btn" data-tab="processes">[#] PROCESSES</button>
+</div>
+
+<div id="tab-battery" class="tab-content active">
 <div class="container">
   <div class="header">
     <div>
@@ -186,6 +247,8 @@
       <button id="freezeToggle" class="freeze-btn">⏸ FREEZE</button>
       <button id="loadHistoryBtn" class="freeze-btn">⏏ LOAD FULL SESSION</button>
       <button id="returnLiveBtn" class="freeze-btn" style="display:none;">⬅ RETURN TO LIVE</button>
+      <button id="exportBtn" class="freeze-btn">[v] EXPORT CSV</button>
+      <button id="notifBtn" class="freeze-btn">[!] ALERTS</button>
     </div>
   </div>
 
@@ -208,7 +271,7 @@
       <div class="stat-val" id="avgDraw">-- W</div>
       <div class="stat-sub"></div>
     </div>
-    <div class="stat-card bad">
+    <div class="stat-card" id="peakCard">
       <div class="stat-label">rate.peak</div>
       <div class="stat-val" id="peakDraw">-- W</div>
       <div class="stat-sub"></div>
@@ -222,6 +285,16 @@
       <div class="stat-label">session.len</div>
       <div class="stat-val" id="sessionDuration">--</div>
       <div class="stat-sub"></div>
+    </div>
+    <div class="stat-card" id="tempCard" style="display:none;">
+      <div class="stat-label">temp.cpu</div>
+      <div class="stat-val" id="cpuTemp">--</div>
+      <div class="stat-sub">celsius</div>
+    </div>
+    <div class="stat-card" id="healthCard" style="display:none;">
+      <div class="stat-label">batt.health</div>
+      <div class="stat-val" id="battHealth">--</div>
+      <div class="stat-sub" id="battHealthSub"></div>
     </div>
     <div class="stat-card warn" id="etrCard" style="display:none;">
       <div class="stat-label">eta.empty</div>
@@ -252,6 +325,88 @@
     </div>
   </div>
 </div>
+</div>
+
+<div id="tab-processes" class="tab-content">
+<div class="container">
+  <div class="header">
+    <div>
+      <div class="prompt">root@laptop <span class="path">~/ProcessAudit</span> $ tail -f audit.log</div>
+      <h1>process_audit.monitor</h1>
+      <div class="subtitle">every running process — signatures, lineage, network, autoruns</div>
+    </div>
+    <div id="procConnectionStatus" class="status-badge status-live"><span class="dot"></span> LIVE</div>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-label">total.procs</div>
+      <div class="stat-val" id="procTotal">--</div>
+      <div class="stat-sub"></div>
+    </div>
+    <div class="stat-card bad">
+      <div class="stat-label">unsigned</div>
+      <div class="stat-val" id="procUnsigned">--</div>
+      <div class="stat-sub"></div>
+    </div>
+    <div class="stat-card warn">
+      <div class="stat-label">windowless</div>
+      <div class="stat-val" id="procWindowless">--</div>
+      <div class="stat-sub">no visible UI</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">oldest.proc</div>
+      <div class="stat-val" id="procOldest">--</div>
+      <div class="stat-sub">time since start</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">net.active</div>
+      <div class="stat-val" id="procNetActive">--</div>
+      <div class="stat-sub">procs with connections</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">autoruns</div>
+      <div class="stat-val" id="procAutoruns">--</div>
+      <div class="stat-sub">auto-launch entries</div>
+    </div>
+  </div>
+
+  <div class="grid-layout">
+    <div class="panel">
+      <div class="panel-title">all_processes.log</div>
+      <input class="proc-search" id="procSearch" type="text" placeholder="filter by name or path..." autocomplete="off">
+      <div class="proc-scroll">
+        <table class="proc-table">
+          <thead>
+            <tr><th>Process</th><th>PID</th><th>Parent</th><th>Signed</th><th>Age</th><th>Window</th><th>Network</th><th>Path</th></tr>
+          </thead>
+          <tbody id="procTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">watchlist.log</div>
+      <div id="watchlistBody"><div class="empty">awaiting data</div></div>
+    </div>
+  </div>
+
+  <div class="grid-layout" style="margin-top: 14px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+    <div class="panel">
+      <div class="panel-title">autoruns.log</div>
+      <div id="autorunsBody"><div class="empty">awaiting data</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">sleep_gaps.log</div>
+      <div id="gapEventsBody"><div class="empty">no gaps detected yet</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">new_procs.log</div>
+      <div id="newProcsBody"><div class="empty">monitoring for new processes...</div></div>
+    </div>
+  </div>
+</div>
+</div>
+
 
 <script>
   let powerChartInstance = null;
@@ -454,12 +609,25 @@
 
     const wattsArray = activeData.map(d => getRate(d) / 1000);
     const avgWatts = (wattsArray.reduce((a, b) => a + b, 0) / wattsArray.length).toFixed(1);
-    const peakDraw = Math.min(...wattsArray);
+    const peakDraw = Math.max(...wattsArray.map(Math.abs));
 
     document.getElementById('currentDraw').innerText = Math.abs(getRate(displayLatest) / 1000).toFixed(1) + ' W';
-    document.getElementById('currentState').innerText = displayLatest.IsOnBattery ? 'discharging' : 'charging';
+    const plan = absoluteLatest.PowerPlan;
+    document.getElementById('currentState').innerText = (displayLatest.IsOnBattery ? 'discharging' : 'charging') + (plan ? ' · ' + plan : '');
+    const cpuTempVal = absoluteLatest.CpuTemp_C;
+    if (cpuTempVal != null && cpuTempVal > 0) {
+      const tempCard = document.getElementById('tempCard');
+      tempCard.style.display = '';
+      document.getElementById('cpuTemp').textContent = cpuTempVal;
+      tempCard.classList.toggle('bad',  cpuTempVal > 90);
+      tempCard.classList.toggle('warn', cpuTempVal > 75 && cpuTempVal <= 90);
+    }
+    checkBatteryNotif(absoluteLatest);
     document.getElementById('avgDraw').innerText = Math.abs(avgWatts) + ' W';
-    document.getElementById('peakDraw').innerText = Math.abs(peakDraw).toFixed(1) + ' W';
+    document.getElementById('peakDraw').innerText = peakDraw.toFixed(1) + ' W';
+    const peakCard = document.getElementById('peakCard');
+    peakCard.classList.toggle('bad',  peakDraw > 30);
+    peakCard.classList.toggle('warn', peakDraw > 15 && peakDraw <= 30);
     document.getElementById('currentPct').innerText = absoluteLatest.BatteryPercent + '%';
 
     const dischargeSamples = activeData.filter(d => d.IsOnBattery === true);
@@ -689,6 +857,14 @@
     powerChartInstance.update('none'); // 'none' = skip animation, instant redraw
   }
 
+  function showStatusMsg(msg) {
+    const el = document.getElementById('connectionStatus');
+    const prev = { cls: el.className, html: el.innerHTML };
+    el.className = 'status-badge status-dead';
+    el.innerHTML = '<span class="dot"></span> ' + msg;
+    setTimeout(() => { el.className = prev.cls; el.innerHTML = prev.html; }, 6000);
+  }
+
   // --- Load Full Session ---
   // Reads full_history.js, written periodically by the logger itself (about
   // once a minute) in the exact same format as the live data.js — same
@@ -705,7 +881,7 @@
     s.src = 'full_history.js?_=' + Date.now();
     s.onload = () => {
       if (typeof window.fullBatteryData === 'undefined' || window.fullBatteryData.length === 0) {
-        alert('full_history.js has no data yet — give the logger about a minute to write its first snapshot, then try again.');
+        showStatusMsg('full_history.js has no data yet — wait ~1 min and try again.');
         return;
       }
       loadedHistory = window.fullBatteryData;
@@ -720,7 +896,7 @@
       statusEl.innerHTML = `<span class="dot"></span> FULL SESSION LOADED — ${loadedHistory.length} rows`;
       renderDashboard();
     };
-    s.onerror = () => alert('Could not find full_history.js — make sure it sits next to Dashboard.html and the logger has been running at least a minute.');
+    s.onerror = () => showStatusMsg('Could not load full_history.js — confirm the logger has been running for at least 1 minute.');
     document.body.appendChild(s);
   });
   returnLiveBtn.addEventListener('click', () => {
@@ -815,6 +991,428 @@
 
   pollForUpdates();
   setInterval(pollForUpdates, 2000);
+
+  // ============ TAB SWITCHER ============
+  // Lazy per-tab polling: the Processes tab's data (signatures, network,
+  // autoruns) only gets fetched/parsed while that tab is actually visible —
+  // no reason to do that work in the background while you're looking at
+  // the Battery tab, or vice versa.
+  let activeTab = 'battery';
+  let processesPollStarted = false;
+
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeTab = btn.dataset.tab;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+      document.getElementById('tab-battery').classList.toggle('active', activeTab === 'battery');
+      document.getElementById('tab-processes').classList.toggle('active', activeTab === 'processes');
+      if (activeTab === 'processes' && !processesPollStarted) {
+        processesPollStarted = true;
+        loadProcessHistory(() => {
+          pollProcesses();
+          setInterval(pollProcesses, 5000);
+        });
+      }
+    });
+  });
+
+  // ============ PROCESSES TAB ============
+  const friendlyProcNames = friendlyNames; // reuse the battery tab's name map
+
+  function sigBadge(sig) {
+    const labels = { microsoft: 'MS', signed: 'signed', unsigned: 'unsigned', nopath: 'n/a', noaccess: 'no access', unknown: '?' };
+    const label = labels[sig] || '?';
+    return `<span class="sig-badge sig-${sig || 'unknown'}">${label}</span>`;
+  }
+
+  function pollProcesses() {
+    if (activeTab !== 'processes') return; // stop polling the moment you leave this tab
+    const old = document.getElementById('procLiveScript');
+    if (old) old.remove();
+    const s = document.createElement('script');
+    s.id = 'procLiveScript';
+    s.src = 'ProcessAudit/processes_live.js?_=' + Date.now();
+    s.onload = renderProcessesTab;
+    s.onerror = () => {
+      const statusEl = document.getElementById('procConnectionStatus');
+      statusEl.className = 'status-badge status-dead';
+      statusEl.innerHTML = '<span class="dot"></span> Can\'t find ProcessAudit data — is ProcessAudit.ps1 running?';
+    };
+    document.body.appendChild(s);
+
+    // Autoruns and gap events change far less often — refresh them less
+    // frequently than the live process snapshot.
+    if (!pollProcesses._slowTick) pollProcesses._slowTick = 0;
+    pollProcesses._slowTick++;
+    if (pollProcesses._slowTick % 12 === 1) loadAutoruns();
+    if (pollProcesses._slowTick % 6 === 1) loadGapEvents();
+  }
+
+  function loadAutoruns() {
+    const old = document.getElementById('autorunsScript');
+    if (old) old.remove();
+    const s = document.createElement('script');
+    s.id = 'autorunsScript';
+    s.src = 'ProcessAudit/autoruns.js?_=' + Date.now();
+    s.onload = renderAutoruns;
+    s.onerror = () => {};
+    document.body.appendChild(s);
+  }
+
+  function loadGapEvents() {
+    const old = document.getElementById('gapEventsScript');
+    if (old) old.remove();
+    const s = document.createElement('script');
+    s.id = 'gapEventsScript';
+    s.src = 'ProcessAudit/gap_events.js?_=' + Date.now();
+    s.onload = renderGapEvents;
+    s.onerror = () => {};
+    document.body.appendChild(s);
+  }
+
+  function renderProcessesTab() {
+    const snap = window.latestSnapshot;
+    if (!snap || !snap.Processes) return;
+    const procs = snap.Processes;
+    detectNewProcs(procs);
+
+    const statusEl = document.getElementById('procConnectionStatus');
+    statusEl.className = 'status-badge status-live';
+    statusEl.innerHTML = '<span class="dot"></span> LIVE';
+
+    const total = procs.length;
+    const unsigned = procs.filter(p => p.Signature === 'unsigned').length;
+    const windowless = procs.filter(p => !p.HasWindow).length;
+    const netActive = procs.filter(p => p.Network && p.Network.length > 0).length;
+    const oldest = procs.reduce((max, p) => Math.max(max, p.AgeSeconds || 0), 0);
+
+    document.getElementById('procTotal').textContent = total;
+    document.getElementById('procUnsigned').textContent = unsigned;
+    document.getElementById('procWindowless').textContent = windowless;
+    document.getElementById('procNetActive').textContent = netActive;
+    document.getElementById('procOldest').textContent = formatTime(oldest);
+
+    // Full process table, sorted oldest-first (long-lived is usually the
+    // more interesting sort order than alphabetical or PID).
+    const sorted = [...procs].sort((a, b) => (b.AgeSeconds || 0) - (a.AgeSeconds || 0));
+    window._allProcsSorted = sorted;
+    applyProcFilter();
+
+    // Watchlist: FIX — "windowless" alone matched ~95% of all processes on a
+    // real Windows box (svchost, services.exe, etc. never had a window and
+    // never will), which drowned out anything actually worth reviewing.
+    // Tightened to: unsigned or ambiguous-signature executables (excluding
+    // pathless pseudo-processes and access-denied checks, both of which are
+    // expected without admin elevation, not inherently suspicious), plus
+    // non-Microsoft-signed windowless long-runners.
+    const watch = procs
+      .filter(p => {
+        if (p.Signature === 'nopath') return false; // no executable file — nothing to flag
+        if (p.Signature === 'noaccess') return false; // likely just needs elevation, not inherently suspicious
+        if (p.Signature === 'microsoft') return false; // Windows' own components
+        if (p.Signature === 'unsigned' || p.Signature === 'unknown') return true;
+        return !p.HasWindow && (p.AgeSeconds || 0) > 3600; // signed but 3rd-party + windowless + long-running
+      })
+      .sort((a, b) => (b.AgeSeconds || 0) - (a.AgeSeconds || 0))
+      .slice(0, 15);
+
+    const watchBody = document.getElementById('watchlistBody');
+    if (watch.length === 0) {
+      watchBody.innerHTML = '<div class="empty">nothing flagged right now</div>';
+    } else {
+      watchBody.innerHTML = watch.map(p => {
+        const name = friendlyProcNames[p.Name.replace(/\.exe$/i, '')] || p.Name;
+        const reasons = [];
+        if (p.Signature === 'unsigned') reasons.push('unsigned');
+        if (!p.HasWindow) reasons.push('windowless');
+        if ((p.AgeSeconds || 0) > 3600) reasons.push(`running ${formatTime(p.AgeSeconds)}`);
+        const modStr = (p.Modules && p.Modules.length)
+          ? p.Modules.slice(0, 5).join(' · ')
+          : '';
+        return `<div class="watch-item">
+          <div>
+            <div class="watch-name">${name} <span style="color:var(--muted); font-weight:400;">(PID ${p.Pid})</span></div>
+            <div class="watch-meta">${reasons.join(' · ')}${p.Path ? ' · ' + p.Path : ''}</div>
+            ${modStr ? `<div class="watch-meta" style="color:var(--phosphor-faint)">dlls: ${modStr}</div>` : ''}
+          </div>
+          ${sigBadge(p.Signature)}
+        </div>`;
+      }).join('');
+    }
+  }
+
+  function renderAutoruns() {
+    const data = window.autorunsData;
+    document.getElementById('procAutoruns').textContent = data ? data.length : '--';
+    const body = document.getElementById('autorunsBody');
+    if (!data || data.length === 0) { body.innerHTML = '<div class="empty">no autoruns found</div>'; return; }
+    body.innerHTML = data.slice(0, 40).map(a => `
+      <div class="watch-item">
+        <div>
+          <div class="watch-name">${a.Name}</div>
+          <div class="watch-meta">${a.Source}${a.Command ? ' · ' + a.Command : ''}</div>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function renderGapEvents() {
+    const data = window.gapEvents;
+    const body = document.getElementById('gapEventsBody');
+    if (!data || data.length === 0) { body.innerHTML = '<div class="empty">no gaps detected yet</div>'; return; }
+    body.innerHTML = data.slice(-30).reverse().map(g => `
+      <div class="gap-item">${g.GapStart} → ${g.GapEnd} — <span class="gap-dur">${formatTime(g.DurationSeconds)}</span> gap (likely sleep/suspend)</div>
+    `).join('');
+  }
+
+  // ============ PROC TABLE DOM DIFFING + SEARCH ============
+  let _procSearchTerm = '';
+  document.getElementById('procSearch').addEventListener('input', (e) => {
+    _procSearchTerm = e.target.value.toLowerCase();
+    if (window._allProcsSorted) applyProcFilter();
+  });
+
+  function applyProcFilter() {
+    const all = window._allProcsSorted;
+    const filtered = _procSearchTerm
+      ? all.filter(p =>
+          p.Name.toLowerCase().includes(_procSearchTerm) ||
+          (p.Path && p.Path.toLowerCase().includes(_procSearchTerm)))
+      : all;
+    updateProcTableDOM(filtered);
+  }
+
+  function updateProcTableDOM(procs) {
+    const tbody = document.getElementById('procTableBody');
+    const existing = new Map();
+    Array.from(tbody.rows).forEach(r => existing.set(Number(r.dataset.pid), r));
+    const seen = new Set();
+
+    procs.slice(0, 150).forEach(p => {
+      const pid = p.Pid;
+      seen.add(pid);
+
+      let row = existing.get(pid);
+      if (!row) {
+        row = document.createElement('tr');
+        row.dataset.pid = pid;
+        row.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="proc-path"></td>';
+      }
+
+      const name  = friendlyProcNames[p.Name.replace(/\.exe$/i, '')] || p.Name;
+      const netStr = (p.Network && p.Network.length) ? `${p.Network.length} conn` : '—';
+      const ageStr = formatTime(p.AgeSeconds || 0);
+      const winStr = p.HasWindow ? 'yes' : 'no';
+      const pathStr = p.Path || '—';
+      const c = row.cells;
+
+      const nameHtml = (p.HasWindow ? '' : '<span class="no-window-icon">◌</span> ') + name;
+      if (c[0].innerHTML !== nameHtml)          c[0].innerHTML   = nameHtml;
+      if (c[1].textContent !== String(pid))     c[1].textContent = pid;
+      if (c[2].textContent !== String(p.ParentPid)) c[2].textContent = p.ParentPid;
+      const badge = sigBadge(p.Signature);
+      if (c[3].innerHTML !== badge)             c[3].innerHTML   = badge;
+      if (c[4].textContent !== ageStr)          c[4].textContent = ageStr;
+      if (c[5].textContent !== winStr)          c[5].textContent = winStr;
+      if (c[6].textContent !== netStr) c[6].textContent = netStr;
+      if (p.Network && p.Network.length) {
+        _procNetData.set(pid, p.Network);
+        c[6].dataset.hasNet = '1';
+      } else {
+        _procNetData.delete(pid);
+        delete c[6].dataset.hasNet;
+      }
+      if (c[7].textContent !== pathStr) { c[7].textContent = pathStr; c[7].title = pathStr; }
+
+      tbody.appendChild(row); // no-op if already last; moves node if reordering
+    });
+
+    Array.from(tbody.rows).forEach(r => { if (!seen.has(Number(r.dataset.pid))) r.remove(); });
+  }
+
+  // ============ KEYBOARD SHORTCUTS ============
+  // 1/2 → switch tabs; a/b/c → battery filter (all / on battery / charging)
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === '1') document.querySelector('.tab-btn[data-tab="battery"]').click();
+    else if (e.key === '2') document.querySelector('.tab-btn[data-tab="processes"]').click();
+    else if (e.key === 'a') document.querySelector('#filterButtons button[data-filter="all"]').click();
+    else if (e.key === 'b') document.querySelector('#filterButtons button[data-filter="unplugged"]').click();
+    else if (e.key === 'c') document.querySelector('#filterButtons button[data-filter="plugged"]').click();
+  });
+
+  // ============ FEATURE 1: BATTERY HEALTH ============
+  function loadBatteryHealth() {
+    const old = document.getElementById('healthScript');
+    if (old) old.remove();
+    const s = document.createElement('script');
+    s.id = 'healthScript';
+    s.src = 'battery_health.js?_=' + Date.now();
+    s.onload = renderHealthCard;
+    document.body.appendChild(s);
+  }
+
+  function renderHealthCard() {
+    const h = window.batteryHealth;
+    if (!h) return;
+    const card = document.getElementById('healthCard');
+    card.style.display = '';
+    const pct = h.HealthPercent;
+    document.getElementById('battHealth').textContent = pct != null ? pct + '%' : '--';
+    const parts = [];
+    if (h.FullCapacity_mWh) parts.push((h.FullCapacity_mWh / 1000).toFixed(1) + ' Wh');
+    if (h.CycleCount)       parts.push(h.CycleCount + ' cycles');
+    document.getElementById('battHealthSub').textContent = parts.join(' · ');
+    card.classList.toggle('bad',  pct != null && pct < 60);
+    card.classList.toggle('warn', pct != null && pct >= 60 && pct < 80);
+  }
+
+  loadBatteryHealth();
+
+  // ============ FEATURE 2: NOTIFICATIONS ============
+  let _notifyThresholds = { 20: false, 10: false };
+
+  (function initNotifBtn() {
+    const btn = document.getElementById('notifBtn');
+    if (Notification.permission === 'granted') {
+      btn.textContent = '[!] ALERTS ON'; btn.classList.add('frozen');
+    }
+    btn.addEventListener('click', () => {
+      if (Notification.permission === 'granted') { showStatusMsg('Notifications already active.'); return; }
+      Notification.requestPermission().then(p => {
+        if (p === 'granted') {
+          btn.textContent = '[!] ALERTS ON'; btn.classList.add('frozen');
+          showStatusMsg('Notifications enabled — alerts fire at ≤20% battery and for unsigned new processes.');
+        } else {
+          showStatusMsg('Permission denied — check browser/OS notification settings.');
+        }
+      });
+    });
+  })();
+
+  function checkBatteryNotif(latest) {
+    if (Notification.permission !== 'granted') return;
+    const pct = latest.BatteryPercent;
+    if (!latest.IsOnBattery) { _notifyThresholds = { 20: false, 10: false }; return; }
+    if (pct <= 10 && !_notifyThresholds[10]) {
+      new Notification('Battery Critical — ' + pct + '%', { body: 'Plug in immediately.' });
+      _notifyThresholds[10] = true; _notifyThresholds[20] = true;
+    } else if (pct <= 20 && !_notifyThresholds[20]) {
+      new Notification('Battery Low — ' + pct + '%', { body: 'Consider plugging in.' });
+      _notifyThresholds[20] = true;
+    }
+  }
+
+  // ============ FEATURE 3 + 4: POWER PLAN logged in BatteryLogger.ps1
+  //              EXPORT CSV ============
+  document.getElementById('exportBtn').addEventListener('click', () => {
+    const data = usingLoadedHistory ? loadedHistory : (window.batteryData || []);
+    if (!data.length) { showStatusMsg('No data to export yet.'); return; }
+    const keys = Object.keys(data[0]);
+    const lines = [keys.join(',')];
+    data.forEach(row => {
+      lines.push(keys.map(k => {
+        const v = row[k];
+        if (v == null) return '';
+        const s = String(v);
+        return (s.includes(',') || s.includes('"') || s.includes('\n'))
+          ? '"' + s.replace(/"/g, '""') + '"' : s;
+      }).join(','));
+    });
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = 'battery_' + new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-') + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  // ============ PROCESS HISTORY BASELINE ============
+  // Loads the last ~60 min of process snapshots so detectNewProcs can diff
+  // against what was running an hour ago, not just since the page opened.
+  function loadProcessHistory(onDone) {
+    const old = document.getElementById('procHistScript');
+    if (old) old.remove();
+    const s = document.createElement('script');
+    s.id = 'procHistScript';
+    s.src = 'ProcessAudit/process_history.js?_=' + Date.now();
+    s.onload = () => {
+      const hist = window.processHistory;
+      if (hist && hist.length && hist[0] && hist[0].Processes) {
+        _prevProcPids = new Set(hist[0].Processes.map(p => p.Pid));
+      }
+      if (onDone) onDone();
+    };
+    s.onerror = () => { if (onDone) onDone(); };
+    document.body.appendChild(s);
+  }
+
+  // ============ NETWORK CONNECTION EXPAND ============
+  const _procNetData = new Map();
+
+  document.getElementById('procTableBody').addEventListener('click', (e) => {
+    const cell = e.target.closest('td[data-has-net]');
+    if (!cell) return;
+    const row = cell.closest('tr');
+    const next = row.nextElementSibling;
+    if (next && next.classList.contains('net-detail')) {
+      next.remove();
+      row.classList.remove('net-open');
+      return;
+    }
+    document.querySelectorAll('.proc-table .net-detail').forEach(r => r.remove());
+    document.querySelectorAll('.proc-table tr.net-open').forEach(r => r.classList.remove('net-open'));
+    const nets = _procNetData.get(Number(row.dataset.pid));
+    if (!nets) return;
+    const detail = document.createElement('tr');
+    detail.className = 'net-detail';
+    detail.innerHTML = `<td colspan="8">${nets.map(n => `<span class="net-conn">${n}</span>`).join('')}</td>`;
+    row.after(detail);
+    row.classList.add('net-open');
+  });
+
+  // ============ FEATURE 5: NEW PROCESS DETECTION ============
+  // Feature 6 (temperature) is logged in BatteryLogger.ps1 and rendered
+  // in renderDashboard above via CpuTemp_C on each entry.
+  let _prevProcPids = null;
+  let _newProcLog   = [];
+
+  function detectNewProcs(procs) {
+    if (_prevProcPids === null) {
+      _prevProcPids = new Set(procs.map(p => p.Pid));
+      return;
+    }
+    const ts = new Date().toLocaleTimeString('en-GB');
+    procs.forEach(p => {
+      if (_prevProcPids.has(p.Pid)) return;
+      if (p.Signature === 'microsoft' || p.Signature === 'nopath') return;
+      _newProcLog.unshift({ time: ts, name: p.Name, pid: p.Pid, sig: p.Signature });
+      if (Notification.permission === 'granted' && (p.Signature === 'unsigned' || p.Signature === 'unknown')) {
+        new Notification('New Unsigned Process', { body: p.Name + ' (PID ' + p.Pid + ') started.' });
+      }
+    });
+    if (_newProcLog.length > 30) _newProcLog.length = 30;
+    _prevProcPids = new Set(procs.map(p => p.Pid));
+    renderNewProcs();
+  }
+
+  function renderNewProcs() {
+    const body = document.getElementById('newProcsBody');
+    if (!body) return;
+    if (!_newProcLog.length) {
+      body.innerHTML = '<div class="empty">monitoring for new processes...</div>';
+      return;
+    }
+    body.innerHTML = _newProcLog.map(e => `
+      <div class="gap-item">
+        <span style="color:var(--muted)">${e.time}</span>
+        <strong> ${e.name}</strong>
+        <span style="color:var(--muted)"> (${e.pid})</span>
+        ${e.sig !== 'signed' ? `<span class="sig-badge sig-${e.sig}" style="margin-left:4px;vertical-align:middle">${e.sig}</span>` : ''}
+      </div>`).join('');
+  }
+
 </script>
 </body>
 </html>

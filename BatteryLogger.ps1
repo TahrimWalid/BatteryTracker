@@ -74,6 +74,41 @@ $isFirstRunAfterWake = $true
 $sessionHistory = New-Object System.Collections.Generic.List[PSCustomObject]
 $fullHistory = New-Object System.Collections.Generic.List[PSCustomObject]
 
+function Write-BatteryHealth {
+    try {
+        $b  = Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop
+        $sd = Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction Stop
+        $fc = Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction Stop
+        $design = if ($sd) { ($sd | Select-Object -First 1).DesignedCapacity    } else { $null }
+        $full   = if ($fc) { ($fc | Select-Object -First 1).FullChargedCapacity } else { $null }
+        $health = if ($design -and $design -gt 0 -and $full) { [math]::Round($full / $design * 100, 1) } else { $null }
+        $cycle  = try { ($b | Select-Object -First 1).CycleCount } catch { $null }
+        $obj    = [PSCustomObject]@{ DesignCapacity_mWh = $design; FullCapacity_mWh = $full; HealthPercent = $health; CycleCount = $cycle }
+        "window.batteryHealth = $($obj | ConvertTo-Json -Compress);" | Out-File "$trackerDir\battery_health.js" -Encoding utf8 -ErrorAction Stop
+    } catch { }
+}
+
+function Get-PowerPlan {
+    try {
+        $out = (powercfg /getactivescheme) -join ' '
+        if ($out -match '\((.+?)\)\s*$') { return $Matches[1].Trim() }
+    } catch { }
+    return $null
+}
+
+function Get-CpuTemp {
+    try {
+        $zones = Get-CimInstance -Namespace root\wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop
+        if ($zones) {
+            return ($zones | ForEach-Object { [math]::Round($_.CurrentTemperature / 10 - 273.15, 0) } | Measure-Object -Maximum).Maximum
+        }
+    } catch { }
+    return $null
+}
+
+Write-BatteryHealth
+$cachedPowerPlan = Get-PowerPlan
+
 while ($true) {
     try { $battery = Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop } catch { Start-Sleep -Seconds 2; continue }
 
@@ -147,6 +182,8 @@ while ($true) {
             ActiveWindow           = $activeWindow   # raw text — JSON handles its own escaping
             ActiveProcess          = $activeProcName
             TopProcessesByCpuDelta = $procString
+            PowerPlan              = $cachedPowerPlan
+            CpuTemp_C              = Get-CpuTemp
         }
 
         $sessionHistory.Add($entryObj)
@@ -156,6 +193,8 @@ while ($true) {
         if ($fullHistory.Count -gt $maxFullHistoryEntries) { $fullHistory.RemoveAt(0) }
 
         $tickCount++
+        if ($tickCount % 60   -eq 0) { $cachedPowerPlan = Get-PowerPlan }
+        if ($tickCount % 1800 -eq 0) { Write-BatteryHealth }
 
         # Tiny write, every tick: just the newest entry. This is what the
         # dashboard polls every 2s under normal operation — cheap to write,
