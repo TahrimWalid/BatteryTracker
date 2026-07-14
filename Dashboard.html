@@ -212,6 +212,25 @@
   .gap-item:last-child { border-bottom: none; }
   .gap-item .gap-dur { color: var(--amber); font-weight: 700; }
 
+  .panel.alert-panel { border-color: rgba(255,92,92,0.3); }
+  .alert-item { font-size: 11px; padding: 6px 0; border-bottom: 1px dashed rgba(255,92,92,0.15); }
+  .alert-item:last-child { border-bottom: none; }
+  .alert-chain { font-weight: 700; color: var(--text); }
+  .alert-reason { color: var(--red); font-size: 10px; margin-top: 2px; }
+  .alert-meta { color: var(--muted); font-size: 10px; margin-top: 1px; }
+  .alert-clear-btn {
+    font-family: inherit; font-size: 9px; font-weight: 700; letter-spacing: 0.5px;
+    padding: 2px 7px; cursor: pointer; text-transform: uppercase;
+    background: transparent; color: var(--muted); border: 1px solid var(--panel-border);
+    flex-shrink: 0;
+  }
+  .alert-clear-btn:hover { color: var(--red); border-color: rgba(255,92,92,0.5); }
+  #alertBadge {
+    display: none; font-size: 9px; font-weight: 700;
+    background: var(--red); color: #050a06; padding: 1px 5px;
+    margin-left: 6px; vertical-align: middle;
+  }
+
   .proc-search {
     width: 100%; background: var(--bg); border: 1px solid var(--panel-border);
     color: var(--text); font-family: inherit; font-size: 11px;
@@ -231,7 +250,7 @@
 
 <div class="tab-switcher">
   <button class="tab-btn active" data-tab="battery">[~] BATTERY</button>
-  <button class="tab-btn" data-tab="processes">[#] PROCESSES</button>
+  <button class="tab-btn" data-tab="processes">[#] PROCESSES<span id="alertBadge"></span></button>
 </div>
 
 <div id="tab-battery" class="tab-content active">
@@ -390,7 +409,26 @@
     </div>
   </div>
 
-  <div class="grid-layout" style="margin-top: 14px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+  <div class="grid-layout" style="margin-top: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
+    <div class="panel alert-panel">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center"><span style="color:var(--red)">parent_alerts.log</span><button class="alert-clear-btn" onclick="clearParentAlerts()">clear</button></div>
+      <div id="parentAlertsBody"><div class="empty">no anomalies detected</div></div>
+    </div>
+    <div class="panel alert-panel">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center"><span style="color:var(--red)">wake_alerts.log</span><button class="alert-clear-btn" onclick="clearWakeAlerts()">clear</button></div>
+      <div id="wakeAlertsBody"><div class="empty">no suspicious post-wake processes</div></div>
+    </div>
+    <div class="panel alert-panel">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center"><span style="color:var(--red)">autorun_alerts.log</span><button class="alert-clear-btn" onclick="clearAutorunAlerts()">clear</button></div>
+      <div id="autorunAlertsBody"><div class="empty">no new autoruns detected</div></div>
+    </div>
+    <div class="panel alert-panel">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center"><span style="color:var(--red)">network_alerts.log <span style="color:var(--muted);font-weight:400;font-size:10px">(after 60s warm-up)</span></span><button class="alert-clear-btn" onclick="clearNetworkAlerts()">clear</button></div>
+      <div id="networkAlertsBody"><div class="empty">building baseline...</div></div>
+    </div>
+  </div>
+
+  <div class="grid-layout" style="margin-top: 10px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
     <div class="panel">
       <div class="panel-title">autoruns.log</div>
       <div id="autorunsBody"><div class="empty">awaiting data</div></div>
@@ -1044,8 +1082,9 @@
     // frequently than the live process snapshot.
     if (!pollProcesses._slowTick) pollProcesses._slowTick = 0;
     pollProcesses._slowTick++;
-    if (pollProcesses._slowTick % 12 === 1) loadAutoruns();
-    if (pollProcesses._slowTick % 6 === 1) loadGapEvents();
+    if (pollProcesses._slowTick % 12 === 1) { loadAutoruns(); loadAutorunAlerts(); }
+    if (pollProcesses._slowTick % 6  === 1) { loadGapEvents(); loadWakeAlerts(); loadNetworkAlerts(); }
+    loadParentAlerts();
   }
 
   function loadAutoruns() {
@@ -1163,6 +1202,171 @@
     body.innerHTML = data.slice(-30).reverse().map(g => `
       <div class="gap-item">${g.GapStart} → ${g.GapEnd} — <span class="gap-dur">${formatTime(g.DurationSeconds)}</span> gap (likely sleep/suspend)</div>
     `).join('');
+  }
+
+  let _seenParentAlertCount  = 0;
+  let _seenAutorunAlertCount = 0;
+  let _seenWakeAlertCount    = 0;
+  let _parentAlertsCleared   = 0;
+  let _wakeAlertsCleared     = 0;
+  let _autorunAlertsCleared  = 0;
+  let _networkAlertsCleared  = 0;
+
+  function updateAlertBadge() {
+    const badge = document.getElementById('alertBadge');
+    if (!badge) return;
+    const count = ((window.parentAlerts  || []).length - _parentAlertsCleared)
+                + ((window.wakeAlerts    || []).length - _wakeAlertsCleared)
+                + ((window.autorunAlerts || []).length - _autorunAlertsCleared)
+                + ((window.networkAlerts || []).length - _networkAlertsCleared);
+    badge.textContent = count;
+    badge.style.display = count > 0 ? 'inline' : 'none';
+  }
+
+  function clearParentAlerts()  { _parentAlertsCleared  = (window.parentAlerts  || []).length; renderParentAlerts();  }
+  function clearWakeAlerts()    { _wakeAlertsCleared    = (window.wakeAlerts    || []).length; renderWakeAlerts();    }
+  function clearAutorunAlerts() { _autorunAlertsCleared = (window.autorunAlerts || []).length; renderAutorunAlerts(); }
+  function clearNetworkAlerts() { _networkAlertsCleared = (window.networkAlerts || []).length; renderNetworkAlerts(); }
+
+  function loadParentAlerts() {
+    const old = document.getElementById('parentAlertsScript');
+    if (old) old.remove();
+    const s = document.createElement('script');
+    s.id = 'parentAlertsScript';
+    s.src = 'ProcessAudit/parent_alerts.js?_=' + Date.now();
+    s.onload = renderParentAlerts;
+    document.body.appendChild(s);
+  }
+
+  function loadAutorunAlerts() {
+    const old = document.getElementById('autorunAlertsScript');
+    if (old) old.remove();
+    const s = document.createElement('script');
+    s.id = 'autorunAlertsScript';
+    s.src = 'ProcessAudit/autorun_alerts.js?_=' + Date.now();
+    s.onload = renderAutorunAlerts;
+    document.body.appendChild(s);
+  }
+
+  function loadWakeAlerts() {
+    const old = document.getElementById('wakeAlertsScript');
+    if (old) old.remove();
+    const s = document.createElement('script');
+    s.id = 'wakeAlertsScript';
+    s.src = 'ProcessAudit/wake_alerts.js?_=' + Date.now();
+    s.onload = renderWakeAlerts;
+    document.body.appendChild(s);
+  }
+
+  function renderParentAlerts() {
+    const data = window.parentAlerts;
+    const body = document.getElementById('parentAlertsBody');
+    if (!body) return;
+    if (data && data.length > _seenParentAlertCount && Notification.permission === 'granted') {
+      data.slice(_seenParentAlertCount).forEach(a => {
+        new Notification('Process Anomaly: ' + a.ParentName + ' → ' + a.ChildName, { body: a.Reason });
+      });
+    }
+    if (data) _seenParentAlertCount = data.length;
+    const visible = data ? data.slice(_parentAlertsCleared) : [];
+    if (!visible.length) {
+      body.innerHTML = '<div class="empty">' + (data && data.length ? 'cleared' : 'no anomalies detected') + '</div>';
+      updateAlertBadge(); return;
+    }
+    body.innerHTML = [...visible].reverse().map(a => `
+      <div class="alert-item">
+        <div class="alert-chain">${a.ParentName} → ${a.ChildName} <span style="color:var(--muted);font-weight:400">(PID ${a.ChildPid})</span></div>
+        <div class="alert-reason">${a.Reason}</div>
+        <div class="alert-meta">${a.Timestamp}</div>
+      </div>`).join('');
+    updateAlertBadge();
+  }
+
+  function renderAutorunAlerts() {
+    const data = window.autorunAlerts;
+    const body = document.getElementById('autorunAlertsBody');
+    if (!body) return;
+    if (data && data.length > _seenAutorunAlertCount && Notification.permission === 'granted') {
+      data.slice(_seenAutorunAlertCount).forEach(a => {
+        new Notification('New Autorun Entry: ' + a.Name, { body: a.Source });
+      });
+    }
+    if (data) _seenAutorunAlertCount = data.length;
+    const visible = data ? data.slice(_autorunAlertsCleared) : [];
+    if (!visible.length) {
+      body.innerHTML = '<div class="empty">' + (data && data.length ? 'cleared' : 'no new autoruns detected') + '</div>';
+      updateAlertBadge(); return;
+    }
+    body.innerHTML = [...visible].reverse().map(a => `
+      <div class="alert-item">
+        <div class="alert-chain">${a.Name}</div>
+        <div class="alert-reason">${a.Source}</div>
+        <div class="alert-meta">${a.Timestamp}${a.Command ? ' \xb7 ' + a.Command.slice(0, 60) : ''}</div>
+      </div>`).join('');
+    updateAlertBadge();
+  }
+
+  function renderWakeAlerts() {
+    const data = window.wakeAlerts;
+    const body = document.getElementById('wakeAlertsBody');
+    if (!body) return;
+    if (data && data.length > _seenWakeAlertCount && Notification.permission === 'granted') {
+      data.slice(_seenWakeAlertCount).forEach(a => {
+        new Notification('Post-Wake Process: ' + a.Name, {
+          body: (a.Signature !== 'microsoft' ? a.Signature + ' \xb7 ' : '') + (a.Path || '')
+        });
+      });
+    }
+    if (data) _seenWakeAlertCount = data.length;
+    const visible = data ? data.slice(_wakeAlertsCleared) : [];
+    if (!visible.length) {
+      body.innerHTML = '<div class="empty">' + (data && data.length ? 'cleared' : 'no suspicious post-wake processes') + '</div>';
+      updateAlertBadge(); return;
+    }
+    body.innerHTML = [...visible].reverse().map(a => `
+      <div class="alert-item">
+        <div class="alert-chain">${a.Name} <span style="color:var(--muted);font-weight:400">(PID ${a.Pid})</span> ${sigBadge(a.Signature)}</div>
+        <div class="alert-meta">${a.Timestamp}${a.Path ? ' \xb7 ' + a.Path.slice(0, 60) : ''}</div>
+      </div>`).join('');
+    updateAlertBadge();
+  }
+
+  let _seenNetworkAlertCount = 0;
+
+  function loadNetworkAlerts() {
+    const old = document.getElementById('networkAlertsScript');
+    if (old) old.remove();
+    const s = document.createElement('script');
+    s.id = 'networkAlertsScript';
+    s.src = 'ProcessAudit/network_alerts.js?_=' + Date.now();
+    s.onload = renderNetworkAlerts;
+    document.body.appendChild(s);
+  }
+
+  function renderNetworkAlerts() {
+    const data = window.networkAlerts;
+    const body = document.getElementById('networkAlertsBody');
+    if (!body) return;
+    if (data && data.length > _seenNetworkAlertCount && Notification.permission === 'granted') {
+      data.slice(_seenNetworkAlertCount).forEach(a => {
+        new Notification('New Network Destination: ' + a.ProcessName, {
+          body: a.RemoteIp + (a.Signature && a.Signature !== 'microsoft' ? ' \xb7 ' + a.Signature : '')
+        });
+      });
+    }
+    if (data) _seenNetworkAlertCount = data.length;
+    const visible = data ? data.slice(_networkAlertsCleared) : [];
+    if (!visible.length) {
+      body.innerHTML = '<div class="empty">' + (data && data.length ? 'cleared' : 'building baseline...') + '</div>';
+      updateAlertBadge(); return;
+    }
+    body.innerHTML = [...visible].reverse().map(a => `
+      <div class="alert-item">
+        <div class="alert-chain">${a.ProcessName} <span style="color:var(--muted);font-weight:400">(PID ${a.Pid})</span> ${sigBadge(a.Signature)}</div>
+        <div class="alert-reason">→ ${a.RemoteIp}</div>
+        <div class="alert-meta">${a.Timestamp}</div>
+      </div>`).join('');
+    updateAlertBadge();
   }
 
   // ============ PROC TABLE DOM DIFFING + SEARCH ============

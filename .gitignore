@@ -1,5 +1,14 @@
-﻿# Runtime-generated data — not source, changes every session
+# Runtime-generated data — not source, changes every session
 BatteryLog.csv
 data.js
 full_history.js
 latest.js
+battery_health.js
+ProcessAudit/processes_live.js
+ProcessAudit/process_history.js
+ProcessAudit/autoruns.js
+ProcessAudit/gap_events.js
+ProcessAudit/parent_alerts.js
+ProcessAudit/wake_alerts.js
+ProcessAudit/autorun_alerts.js
+ProcessAudit/network_alerts.js

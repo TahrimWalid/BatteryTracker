@@ -108,6 +108,7 @@ function Get-CpuTemp {
 
 Write-BatteryHealth
 $cachedPowerPlan = Get-PowerPlan
+$cachedCpuTemp   = Get-CpuTemp
 
 while ($true) {
     try { $battery = Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop } catch { Start-Sleep -Seconds 2; continue }
@@ -183,7 +184,7 @@ while ($true) {
             ActiveProcess          = $activeProcName
             TopProcessesByCpuDelta = $procString
             PowerPlan              = $cachedPowerPlan
-            CpuTemp_C              = Get-CpuTemp
+            CpuTemp_C              = $cachedCpuTemp
         }
 
         $sessionHistory.Add($entryObj)
@@ -193,6 +194,7 @@ while ($true) {
         if ($fullHistory.Count -gt $maxFullHistoryEntries) { $fullHistory.RemoveAt(0) }
 
         $tickCount++
+        if ($tickCount % 5    -eq 0) { $cachedCpuTemp   = Get-CpuTemp }
         if ($tickCount % 60   -eq 0) { $cachedPowerPlan = Get-PowerPlan }
         if ($tickCount % 1800 -eq 0) { Write-BatteryHealth }
 

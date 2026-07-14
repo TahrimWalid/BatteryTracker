@@ -72,6 +72,41 @@ $moduleCache    = @{}
 $history   = New-Object System.Collections.Generic.List[PSCustomObject]
 $gapEvents = New-Object System.Collections.Generic.List[PSCustomObject]
 
+# --- Alert state ---
+$parentAlerts     = New-Object System.Collections.Generic.List[PSCustomObject]
+$wakeAlerts       = New-Object System.Collections.Generic.List[PSCustomObject]
+$autorunAlerts    = New-Object System.Collections.Generic.List[PSCustomObject]
+$alertedChildPids  = New-Object 'System.Collections.Generic.HashSet[int]'
+$prevAutorunKeys   = New-Object 'System.Collections.Generic.HashSet[string]'
+$preSleepPids      = New-Object 'System.Collections.Generic.HashSet[int]'
+$networkAlerts     = New-Object System.Collections.Generic.List[PSCustomObject]
+$networkBaseline   = @{}   # processName(lower) → HashSet<string> of seen remote IPs
+$networkWarmupTicks = 12   # ~60s at 5s polling — silent baseline accumulation
+
+# Parent → child combinations that indicate likely code-execution abuse.
+# Child '*' means any child from that parent is suspicious.
+$anomalyRules = @(
+    @{ Parent='winword';  Child='powershell'; Reason='Word spawned PowerShell — macro attack vector' }
+    @{ Parent='winword';  Child='cmd';        Reason='Word spawned CMD' }
+    @{ Parent='winword';  Child='wscript';    Reason='Word spawned WScript' }
+    @{ Parent='winword';  Child='mshta';      Reason='Word spawned MSHTA' }
+    @{ Parent='excel';    Child='powershell'; Reason='Excel spawned PowerShell — macro attack vector' }
+    @{ Parent='excel';    Child='cmd';        Reason='Excel spawned CMD' }
+    @{ Parent='excel';    Child='wscript';    Reason='Excel spawned WScript' }
+    @{ Parent='powerpnt'; Child='powershell'; Reason='PowerPoint spawned PowerShell' }
+    @{ Parent='outlook';  Child='powershell'; Reason='Outlook spawned PowerShell' }
+    @{ Parent='chrome';   Child='powershell'; Reason='Chrome spawned PowerShell' }
+    @{ Parent='msedge';   Child='powershell'; Reason='Edge spawned PowerShell' }
+    @{ Parent='firefox';  Child='powershell'; Reason='Firefox spawned PowerShell' }
+    @{ Parent='explorer'; Child='powershell'; Reason='Explorer spawned PowerShell — possible lolbin abuse' }
+    @{ Parent='svchost';  Child='powershell'; Reason='svchost spawned PowerShell — unusual' }
+    @{ Parent='wscript';  Child='powershell'; Reason='WScript spawned PowerShell — staged execution' }
+    @{ Parent='cscript';  Child='powershell'; Reason='CScript spawned PowerShell — staged execution' }
+    @{ Parent='mshta';    Child='powershell'; Reason='MSHTA spawned PowerShell — HTA attack vector' }
+    @{ Parent='mshta';    Child='cmd';        Reason='MSHTA spawned CMD' }
+    @{ Parent='lsass';    Child='*';          Reason='lsass spawned a child — credential dumping indicator' }
+)
+
 $tickCount = 0
 $prevTime  = Get-Date
 
@@ -126,7 +161,9 @@ while ($true) {
     # means the machine was asleep/suspended in between (nothing can execute
     # during true suspend, including this script). Logged explicitly instead
     # of silently vanishing.
+    $wakeOccurred = $false
     if ($elapsed -gt ($pollIntervalSeconds * 3)) {
+        $wakeOccurred = $true
         $gapEvents.Add([PSCustomObject]@{
             GapStart        = $prevTime.ToString("yyyy-MM-dd HH:mm:ss")
             GapEnd          = $now.ToString("yyyy-MM-dd HH:mm:ss")
@@ -150,13 +187,27 @@ while ($true) {
     $procs = Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue
 
     # Network connections mapped by owning PID — plain cmdlet, no ETW needed.
-    $netByPid = @{}
+    # One pass builds both the display strings ($netByPid) and the raw IP set
+    # ($netIpsByPid) used for baseline analysis — no second cmdlet call.
+    $netByPid    = @{}
+    $netIpsByPid = @{}
     try {
         Get-NetTCPConnection -ErrorAction SilentlyContinue | ForEach-Object {
             $ownerPid = [int]$_.OwningProcess
             if (-not $netByPid.ContainsKey($ownerPid)) { $netByPid[$ownerPid] = @() }
             if ($netByPid[$ownerPid].Count -lt 5) {
                 $netByPid[$ownerPid] += "$($_.RemoteAddress):$($_.RemotePort) [$($_.State)]"
+            }
+            # Collect Established remote IPs only — exclude loopback, unspecified,
+            # and Listen rows where RemotePort is 0.
+            $rAddr = $_.RemoteAddress
+            if ($_.State -eq 'Established' -and $_.RemotePort -gt 0 -and
+                $rAddr -and $rAddr -ne '0.0.0.0' -and $rAddr -ne '::' -and
+                $rAddr -ne '::1' -and -not $rAddr.StartsWith('127.')) {
+                if (-not $netIpsByPid.ContainsKey($ownerPid)) {
+                    $netIpsByPid[$ownerPid] = New-Object 'System.Collections.Generic.HashSet[string]'
+                }
+                $netIpsByPid[$ownerPid].Add($rAddr) | Out-Null
             }
         }
     } catch { }
@@ -185,6 +236,90 @@ while ($true) {
             Modules    = $modules
             Network    = if ($netByPid.ContainsKey($pidInt)) { $netByPid[$pidInt] } else { @() }
         }
+    }
+
+    # Build PID → lowercase-name map for parent-child lookups.
+    $pidToName = @{}
+    foreach ($p in $procs) { $pidToName[[int]$p.ProcessId] = ($p.Name -replace '\.exe$','').ToLower() }
+
+    # --- Post-wake diff: flag non-MS processes that weren't present before sleep ---
+    if ($wakeOccurred -and $preSleepPids.Count -gt 0) {
+        foreach ($proc in $processSnapshot) {
+            if (-not $preSleepPids.Contains($proc.Pid) -and
+                $proc.Signature -ne 'microsoft' -and $proc.Signature -ne 'nopath') {
+                $wakeAlerts.Add([PSCustomObject]@{
+                    Timestamp = $timestamp; Name = $proc.Name
+                    Pid = $proc.Pid; Signature = $proc.Signature; Path = $proc.Path
+                })
+            }
+        }
+        try {
+            "window.wakeAlerts = $(@($wakeAlerts) | ConvertTo-Json -Compress -Depth 3);" |
+                Out-File "$trackerDir\wake_alerts.js" -Encoding utf8 -ErrorAction Stop
+        } catch { }
+    }
+
+    # --- Parent-child anomaly check ---
+    foreach ($proc in $processSnapshot) {
+        if ($alertedChildPids.Contains($proc.Pid)) { continue }
+        $childName  = ($proc.Name -replace '\.exe$','').ToLower()
+        $parentName = if ($pidToName.ContainsKey($proc.ParentPid)) { $pidToName[$proc.ParentPid] } else { '' }
+        if (-not $parentName) { continue }
+        foreach ($rule in $anomalyRules) {
+            if (($rule.Child -eq '*' -or $childName -eq $rule.Child) -and $parentName -eq $rule.Parent) {
+                $alertedChildPids.Add($proc.Pid) | Out-Null
+                $parentAlerts.Add([PSCustomObject]@{
+                    Timestamp  = $timestamp; ParentName = $parentName; ParentPid = $proc.ParentPid
+                    ChildName  = $proc.Name; ChildPid = $proc.Pid; Reason = $rule.Reason
+                })
+                break
+            }
+        }
+    }
+    # Purge alerted PID slots for processes that have since exited — frees the
+    # slot so the same child PID reused by a later process isn't silently ignored.
+    $livePids = New-Object 'System.Collections.Generic.HashSet[int]'
+    foreach ($proc in $processSnapshot) { $livePids.Add($proc.Pid) | Out-Null }
+    $alertedChildPids.IntersectWith($livePids)
+
+    if ($parentAlerts.Count -gt 0) {
+        try {
+            "window.parentAlerts = $(@($parentAlerts) | ConvertTo-Json -Compress -Depth 3);" |
+                Out-File "$trackerDir\parent_alerts.js" -Encoding utf8 -ErrorAction Stop
+        } catch { }
+    }
+
+    # --- Network baseline ---
+    # First $networkWarmupTicks ticks silently build the normal-traffic map.
+    # After that, any first-seen remote IP for a known process is an alert.
+    # New IPs are immediately added to the baseline so each destination is only
+    # flagged once — subsequent ticks to the same IP are silent.
+    $networkFound = $false
+    foreach ($proc in $processSnapshot) {
+        if (-not $netIpsByPid.ContainsKey($proc.Pid)) { continue }
+        $procName = $proc.Name.ToLower()
+        if (-not $networkBaseline.ContainsKey($procName)) {
+            $networkBaseline[$procName] = New-Object 'System.Collections.Generic.HashSet[string]'
+        }
+        foreach ($ip in $netIpsByPid[$proc.Pid]) {
+            if ($tickCount -le $networkWarmupTicks) {
+                $networkBaseline[$procName].Add($ip) | Out-Null
+            } elseif (-not $networkBaseline[$procName].Contains($ip)) {
+                $networkAlerts.Add([PSCustomObject]@{
+                    Timestamp   = $timestamp; ProcessName = $proc.Name
+                    Pid         = $proc.Pid;  RemoteIp    = $ip
+                    Signature   = $proc.Signature
+                })
+                $networkBaseline[$procName].Add($ip) | Out-Null
+                $networkFound = $true
+            }
+        }
+    }
+    if ($networkFound) {
+        try {
+            "window.networkAlerts = $(@($networkAlerts) | ConvertTo-Json -Compress -Depth 3);" |
+                Out-File "$trackerDir\network_alerts.js" -Encoding utf8 -ErrorAction Stop
+        } catch { }
     }
 
     $snapshotObj = [PSCustomObject]@{ Timestamp = $timestamp; Processes = $processSnapshot }
@@ -261,7 +396,38 @@ while ($true) {
         } catch {
             Write-Host "[$timestamp] Could not update autoruns.js (file locked)." -ForegroundColor Red
         }
+
+        # Diff against the previous scan — flag any entry that wasn't there before.
+        $currentKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($a in $autoruns) { $currentKeys.Add("$($a.Source)|$($a.Name)") | Out-Null }
+        if ($prevAutorunKeys.Count -gt 0) {
+            $newFound = $false
+            foreach ($key in $currentKeys) {
+                if (-not $prevAutorunKeys.Contains($key)) {
+                    $match = $autoruns | Where-Object { "$($_.Source)|$($_.Name)" -eq $key } | Select-Object -First 1
+                    if ($match) {
+                        $autorunAlerts.Add([PSCustomObject]@{
+                            Timestamp = $timestamp; Source = $match.Source
+                            Name = $match.Name; Command = $match.Command
+                        })
+                        $newFound = $true
+                    }
+                }
+            }
+            if ($newFound) {
+                try {
+                    "window.autorunAlerts = $(@($autorunAlerts) | ConvertTo-Json -Compress -Depth 3);" |
+                        Out-File "$trackerDir\autorun_alerts.js" -Encoding utf8 -ErrorAction Stop
+                } catch { }
+            }
+        }
+        $prevAutorunKeys = $currentKeys
     }
+
+    # Capture the PID set just before sleeping so the next tick can diff
+    # against it when a wake event is detected.
+    $preSleepPids = New-Object 'System.Collections.Generic.HashSet[int]'
+    foreach ($proc in $processSnapshot) { $preSleepPids.Add($proc.Pid) | Out-Null }
 
     Start-Sleep -Seconds $pollIntervalSeconds
 }

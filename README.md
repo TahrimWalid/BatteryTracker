@@ -80,7 +80,11 @@ ProcessAudit\ProcessAudit.ps1
   every 5 s   ──► processes_live.js   full process census snapshot
   every ~60 s ──► process_history.js  rolling 1-h history of snapshots
   every ~5 min──► autoruns.js         Registry Run keys, Scheduled Tasks, Startup, WMI subs
-              ──► gap_events.js       sleep/wake gap log
+  on detection──► gap_events.js       sleep/wake gap log
+  on detection──► parent_alerts.js    anomalous parent→child process pairs
+  on detection──► wake_alerts.js      non-MS processes present after sleep that weren't before
+  on detection──► autorun_alerts.js   autorun entries added since the last scan
+  on detection──► network_alerts.js   first-seen remote IP per process (after 60s warm-up)
 
 Dashboard.html
   Battery tab  — injects latest.js each tick; resyncs from data.js every ~40 s
@@ -313,9 +317,31 @@ For `unsigned` and `unknown` processes, `Get-Process.Modules` is called once per
 | `autoruns.js` | Every 60 ticks (~5 min) | All persistence enumeration results |
 | `gap_events.js` | On detection | Cumulative sleep/suspend gap log |
 
+### Security Alert Panels
+
+Three alert panels are shown at the top of the lower grid. They appear empty until an event is detected, at which point the border turns red and the panel fills. Browser notifications fire if permission was granted via the `[!] ALERTS` button.
+
+**parent_alerts.log — process lineage anomalies**
+
+Each new process is checked against a list of suspicious parent→child pairs. Examples: Word/Excel spawning PowerShell (macro execution path), browsers spawning PowerShell, WScript/CScript/MSHTA spawning PowerShell (staged execution), lsass spawning anything (credential dumping indicator). Alerts accumulate for the session and deduplicate by PID — the same child is only reported once even if it stays alive across multiple scans.
+
+**wake_alerts.log — post-sleep new processes**
+
+When the poll gap indicates a sleep/resume cycle, the process snapshot taken just before sleep is compared against the current snapshot. Any non-Microsoft-signed process present after waking that was absent before is logged. This catches software that uses the suspend window to install or launch silently.
+
+**autorun_alerts.log — persistence changes**
+
+Every ~5-minute autorun scan is diffed against the previous scan. New entries — in Registry Run/RunOnce, Scheduled Tasks, Startup folders, or WMI subscriptions — are flagged immediately. Benign software installs will trigger this; that is expected. The value is in knowing exactly when and what changed, so installs you recognize can be dismissed and surprises stand out.
+
+**network_alerts.log — new remote destinations per process**
+
+The first 60 seconds of the auditor's run is a silent warm-up: every Established TCP connection is added to a per-process IP baseline with no alerts. After warm-up, any first-seen remote IP for a known process is logged. Chrome connecting to a new Google IP address = expected and will populate the baseline fast. Chrome later connecting to `185.x.x.x:4444` = flagged immediately. Each destination is only flagged once — subsequent connections to the same IP are silent. No new WMI calls: this is pure analysis of the TCP connection data already collected every tick.
+
 ### Scope Note
 
-This is a transparency tool, not anti-malware. It uses user-mode Windows APIs only. A process that actively hides from these APIs (rootkit-level kernel driver hooking) is outside scope. Polling also means a process that spawns and fully exits within one 5-second tick is invisible.
+This is a transparency tool, not anti-malware. It uses user-mode Windows APIs only. A process that actively hides from these APIs (rootkit-level kernel driver hooking) is outside scope. Polling also means a process that spawns and fully exits within one 5-second tick is invisible — though in practice such processes almost always leave a downstream trace that this tool does catch: a new autorun entry, a persistent child process, or a new network destination.
+
+If you need zero-second process visibility specifically, run [Sysmon](https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon) (free, Sysinternals/Microsoft) alongside this tool. It uses ETW at the kernel level to log every process creation (Event ID 1, with full command line and parent chain) to the Windows Event Log — exactly the blind spot that polling cannot close. The two tools complement rather than overlap.
 
 ---
 
@@ -345,7 +371,11 @@ BatteryTracker/
     ├── processes_live.js
     ├── process_history.js
     ├── autoruns.js
-    └── gap_events.js
+    ├── gap_events.js
+    ├── parent_alerts.js
+    ├── wake_alerts.js
+    ├── autorun_alerts.js
+    └── network_alerts.js
 ```
 
 Runtime files are created on the first run and are excluded from version control via `.gitignore`.
