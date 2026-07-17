@@ -932,6 +932,7 @@
       const statusEl = document.getElementById('connectionStatus');
       statusEl.className = 'status-badge status-frozen';
       statusEl.innerHTML = `<span class="dot"></span> FULL SESSION LOADED — ${loadedHistory.length} rows`;
+      statusEl.dataset.state = 'frozen';
       renderDashboard();
     };
     s.onerror = () => showStatusMsg('Could not load full_history.js — confirm the logger has been running for at least 1 minute.');
@@ -1018,6 +1019,7 @@
       freezeBtn.classList.add('frozen');
       statusEl.className = 'status-badge status-frozen';
       statusEl.innerHTML = '<span class="dot"></span> FROZEN — data still logging in background';
+      statusEl.dataset.state = 'frozen';
       scrollOffset = Math.max(0, lastActiveData.length - VIEWPORT_SIZE); // start scroll at "now", not the beginning
       renderDashboard();
     } else {
